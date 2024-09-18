@@ -1,6 +1,24 @@
+version: '3'
 services:
   trading-bot:
     build: .
     env_file:
       - .env
     restart: unless-stopped
+
+  influxdb:
+    image: influxdb:latest
+    ports:
+      - "8086:8086"
+    volumes:
+      - influxdb_data:/var/lib/influxdb2
+    environment:
+      - DOCKER_INFLUXDB_INIT_MODE=setup
+      - DOCKER_INFLUXDB_INIT_USERNAME=monuser
+      - DOCKER_INFLUXDB_INIT_PASSWORD=monmotdepasse
+      - DOCKER_INFLUXDB_INIT_ORG=monorganisation
+      - DOCKER_INFLUXDB_INIT_BUCKET=market_data
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=montokenadmin
+
+volumes:
+  influxdb_data:

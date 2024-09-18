@@ -7,6 +7,9 @@ from binance.exceptions import BinanceAPIException, BinanceOrderException
 import requests.exceptions
 from dotenv import load_dotenv
 import os
+from influxdb_client import InfluxDBClient, Point
+from influxdb_client.client.write_api import SYNCHRONOUS
+from database_handler import DatabaseHandler
 
 class TradingBot:
     def __init__(self):
@@ -26,6 +29,9 @@ class TradingBot:
         self.LONG_WINDOW = int(os.getenv('LONG_WINDOW'))
         self.INTERVAL = os.getenv('INTERVAL')
         self.LOOKBACK = os.getenv('LOOKBACK')
+
+        # Initialisation du gestionnaire de base de données
+        self.db_handler = DatabaseHandler()
 
         # Initialize the Binance client
         self.initialize_client()
@@ -122,62 +128,63 @@ class TradingBot:
     def run(self):
         self.logger.info("Starting main trading loop")
         position = None  # Current position: 'LONG', 'SHORT', or None
-        while True:
-            try:
-                self.logger.debug("Starting new iteration")
-                # Fetch and prepare data
-                data = self.get_data()
-                if data is None:
-                    self.logger.warning("Failed to fetch data, waiting for 60 seconds before retrying")
-                    time.sleep(60)
-                    continue
-                
-                data = self.calculate_indicators(data)
-                if data is None:
-                    self.logger.warning("Failed to calculate indicators, waiting for 60 seconds before retrying")
-                    time.sleep(60)
-                    continue
-                
-                if pd.isnull(data['ma_short'].iloc[-1]) or pd.isnull(data['ma_long'].iloc[-1]):
-                    self.logger.warning("Not enough data to compute indicators, waiting for 60 seconds")
-                    time.sleep(60)
-                    continue
+        try:
+            while True:
+                try:
+                    self.logger.debug("Starting new iteration")
+                    # Fetch and prepare data
+                    data = self.get_data()
+                    if data is None:
+                        self.logger.warning("Failed to fetch data, waiting for 60 seconds before retrying")
+                        time.sleep(60)
+                        continue
+                    
+                    data = self.calculate_indicators(data)
+                    if data is not None:
+                        self.db_handler.write_market_data(self.SYMBOL, data)
+                    
+                    if pd.isnull(data['ma_short'].iloc[-1]) or pd.isnull(data['ma_long'].iloc[-1]):
+                        self.logger.warning("Not enough data to compute indicators, waiting for 60 seconds")
+                        time.sleep(60)
+                        continue
 
-                # Generate trading signal
-                signal = self.generate_signal(data)
-                if signal is None:
-                    self.logger.warning("Failed to generate signal, waiting for 60 seconds before retrying")
+                    # Generate trading signal
+                    signal = self.generate_signal(data)
+                    if signal is None:
+                        self.logger.warning("Failed to generate signal, waiting for 60 seconds before retrying")
+                        time.sleep(60)
+                        continue
+                    
+                    self.logger.info(f"Generated signal: {signal}")
+                    
+                    # Execute trades based on the signal
+                    if signal == 'BUY' and position != 'LONG':
+                        self.logger.info("Executing BUY order")
+                        order = self.place_order(SIDE_BUY)
+                        if order:
+                            position = 'LONG'
+                            self.logger.info("Position changed to LONG")
+                    elif signal == 'SELL' and position != 'SHORT':
+                        self.logger.info("Executing SELL order")
+                        order = self.place_order(SIDE_SELL)
+                        if order:
+                            position = 'SHORT'
+                            self.logger.info("Position changed to SHORT")
+                    else:
+                        self.logger.info("No action taken, maintaining current position")
+                    
+                    # Wait before the next iteration
+                    self.logger.debug("Waiting for 60 seconds before next iteration")
                     time.sleep(60)
-                    continue
-                
-                self.logger.info(f"Generated signal: {signal}")
-                
-                # Execute trades based on the signal
-                if signal == 'BUY' and position != 'LONG':
-                    self.logger.info("Executing BUY order")
-                    order = self.place_order(SIDE_BUY)
-                    if order:
-                        position = 'LONG'
-                        self.logger.info("Position changed to LONG")
-                elif signal == 'SELL' and position != 'SHORT':
-                    self.logger.info("Executing SELL order")
-                    order = self.place_order(SIDE_SELL)
-                    if order:
-                        position = 'SHORT'
-                        self.logger.info("Position changed to SHORT")
-                else:
-                    self.logger.info("No action taken, maintaining current position")
-                
-                # Wait before the next iteration
-                self.logger.debug("Waiting for 60 seconds before next iteration")
-                time.sleep(60)
-            except KeyboardInterrupt:
-                self.logger.info("Keyboard interrupt received. Exiting...")
-                break
-            except Exception as e:
-                self.logger.error(f"Unexpected error in main loop: {e}")
-                self.logger.info("Waiting for 60 seconds before retrying")
-                time.sleep(60)
+                except KeyboardInterrupt:
+                    self.logger.info("Keyboard interrupt received. Exiting...")
+                    break
+                except Exception as e:
+                    self.logger.error(f"Unexpected error in main loop: {e}")
+                    self.logger.info("Waiting for 60 seconds before retrying")
+                    time.sleep(60)
+        finally:
+            self.db_handler.close()
 
 if __name__ == "__main__":
     bot = TradingBot()

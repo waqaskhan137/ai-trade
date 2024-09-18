@@ -2,3 +2,4 @@ pandas
 python-binance
 requests
 python-dotenv
+influxdb-client==1.36.1
